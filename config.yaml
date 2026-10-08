@@ -1,0 +1,45 @@
+# Bubble Robot — конфигурация MVP.
+# Координаты: начало в центре комнаты, x вправо, y вперёд, z вверх. Единицы — метры и секунды.
+
+# Safety envelope первой версии (HW-80). Менять только осознанно: после правки — прогнать тесты.
+safety:
+  min_human_distance_m: 1.5     # горизонтальная дистанция дрон—человек, ближе нельзя
+  altitude_min_m: 0.5
+  altitude_max_m: 1.2           # ниже головы: никаких полётов над головой и возле лица
+  max_speed_mps: 0.3
+  max_accel_mps2: 0.3
+  tracking_hold_after_s: 0.3    # потеря трекинга дольше → Hold
+  tracking_land_after_s: 2.0    # потеря трекинга дольше → Land
+  battery_land_below: 0.2       # доля заряда, ниже которой → Land
+  geofence_margin_m: 0.3        # отступ рабочей зоны от стен
+
+bubble:
+  radius_min_m: 1.5
+  radius_max_m: 2.0
+  target_radius_m: 1.75
+  side_deg: 90                  # сторона относительно направления человека: 90 — слева, -90 — справа
+  flight_altitude_m: 0.8
+
+room:
+  width_m: 6.0                  # по x
+  depth_m: 6.0                  # по y
+
+control:
+  rate_hz: 50
+  radial_gain: 2.5              # 1/с, удержание радиуса
+  tangential_gain: 1.0          # 1/с, переход на выбранную сторону
+  altitude_gain: 1.5            # 1/с
+  land_speed_mps: 0.2
+
+sim:
+  human_speed_mps: 0.2
+  human_accel_mps2: 1.0
+  drone_start: [0.0, 2.0]
+  drone_response_s: 0.2         # постоянная времени отклика дрона на velocity setpoint
+  battery_flight_time_s: 420    # время полёта от 100% до 0%
+  tracker_rate_hz: 30
+  tracker_latency_s: 0.05
+  tracker_noise_m: 0.01
+
+logging:
+  dir: logs

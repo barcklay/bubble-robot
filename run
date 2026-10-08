@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Одна команда на всё: при первом запуске ставит окружение, затем запускает приложение.
+#   ./run                      симулятор с клавиатурой
+#   ./run sim --headless       5-минутный сценарий без окна
+#   ./run test                 тесты
+set -euo pipefail
+cd "$(dirname "$0")"
+
+if [ ! -x .venv/bin/python ]; then
+  PY=$(command -v python3.12 || command -v python3.13 || command -v python3.11 || command -v python3)
+  echo "Создаю окружение (.venv, $PY)…"
+  "$PY" -m venv .venv
+  .venv/bin/pip install --quiet --upgrade pip
+  .venv/bin/pip install --quiet -e ".[dev,vision]"
+fi
+
+if [ "${1:-}" = "test" ]; then
+  shift
+  exec .venv/bin/python -m pytest "$@"
+fi
+exec .venv/bin/python -m bubble_robot "$@"
