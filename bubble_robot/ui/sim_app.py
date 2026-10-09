@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 
 import pygame
+from pygame._sdl2 import controller
 
-from ..safety.state_machine import Command, State
+from ..safety.state_machine import AIRBORNE, Command, State
 from ..sim.scenario import DemoScenario
 from ..sim.world import Simulation
 
@@ -48,6 +49,19 @@ HELP = [
     ("Esc", "выход"),
 ]
 
+# Геймпад (проверялось на раскладке Nintendo Switch Pro Controller, кнопки — по надписям).
+HELP_GAMEPAD = [
+    ("левый стик", "человек"),
+    ("A", "взлёт"),
+    ("Y", "Hold / Resume"),
+    ("B", "посадка"),
+    ("L или R", "EMERGENCY STOP"),
+    ("+", "сброс после аварии"),
+    ("−", "потеря трекинга"),
+]
+STICK_DEADZONE = 0.15
+STICK_MAX = 32767
+
 
 class SimApp:
     def __init__(self, sim: Simulation, scenario: DemoScenario | None = None):
@@ -64,6 +78,10 @@ class SimApp:
         font_name = pygame.font.match_font("menlo,dejavusansmono,arial")
         self.font = pygame.font.Font(font_name, 15)
         self.font_big = pygame.font.Font(font_name, 26)
+        self.gamepad: controller.Controller | None = None
+        controller.init()
+        for index in range(controller.get_count()):
+            self.attach_gamepad(index)
 
     def to_px(self, x: float, y: float) -> tuple[int, int]:
         return (
@@ -76,10 +94,7 @@ class SimApp:
         running = True
         while running:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    running = self.on_key(event.key)
+                running = self.handle_event(event) and running
             if self.scenario is not None:
                 self.scenario.apply(self.sim)
                 running = running and self.sim.t < self.scenario.duration_s
@@ -91,34 +106,85 @@ class SimApp:
             clock.tick(round(1 / self.sim.dt))
         pygame.quit()
 
+    def handle_event(self, event) -> bool:
+        """Возвращает False, когда пора выходить."""
+        if event.type == pygame.QUIT:
+            return False
+        if event.type == pygame.KEYDOWN:
+            return self.on_key(event.key)
+        if event.type == pygame.CONTROLLERBUTTONDOWN:
+            self.on_button(event.button)
+        elif event.type == pygame.CONTROLLERDEVICEADDED:
+            self.attach_gamepad(event.device_index)
+        elif event.type == pygame.CONTROLLERDEVICEREMOVED:
+            if self.gamepad is not None and not self.gamepad.attached():
+                self.on_gamepad_lost()
+        return True
+
     def human_input(self) -> tuple[float, float]:
         keys = pygame.key.get_pressed()
         vx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
         vy = (keys[pygame.K_UP] or keys[pygame.K_w]) - (keys[pygame.K_DOWN] or keys[pygame.K_s])
+        if self.gamepad is not None:
+            sx = self.gamepad.get_axis(pygame.CONTROLLER_AXIS_LEFTX) / STICK_MAX
+            sy = -self.gamepad.get_axis(pygame.CONTROLLER_AXIS_LEFTY) / STICK_MAX
+            if math.hypot(sx, sy) > STICK_DEADZONE:
+                vx, vy = vx + sx, vy + sy
         speed = self.sim.cfg.sim.human_speed_mps
         return vx * speed, vy * speed
 
     def on_key(self, key: int) -> bool:
-        sim = self.sim
         if key == pygame.K_ESCAPE:
             return False
-        command = None
         if key == pygame.K_SPACE:
-            command = Command.TAKEOFF
+            self.send(Command.TAKEOFF)
         elif key == pygame.K_h:
-            command = Command.RESUME if sim.state is State.HOLD and sim.sm.manual_hold else Command.HOLD
+            self.send(self.hold_or_resume())
         elif key == pygame.K_l:
-            command = Command.LAND
+            self.send(Command.LAND)
         elif key == pygame.K_e:
-            command = Command.EMERGENCY_STOP
+            self.send(Command.EMERGENCY_STOP)
         elif key == pygame.K_r:
-            command = Command.RESET
+            self.send(Command.RESET)
         elif key == pygame.K_t:
-            sim.tracker.dropout = not sim.tracker.dropout
-        if command is not None:
-            accepted = sim.command(command)
-            self.message = "" if accepted else f"отклонено: {sim.sm.rejected[-1].reason}"
+            self.sim.tracker.dropout = not self.sim.tracker.dropout
         return True
+
+    def on_button(self, button: int) -> None:
+        if button in (pygame.CONTROLLER_BUTTON_LEFTSHOULDER, pygame.CONTROLLER_BUTTON_RIGHTSHOULDER):
+            self.send(Command.EMERGENCY_STOP)
+        elif button == pygame.CONTROLLER_BUTTON_A:
+            self.send(Command.TAKEOFF)
+        elif button == pygame.CONTROLLER_BUTTON_Y:
+            self.send(self.hold_or_resume())
+        elif button == pygame.CONTROLLER_BUTTON_B:
+            self.send(Command.LAND)
+        elif button == pygame.CONTROLLER_BUTTON_START:
+            self.send(Command.RESET)
+        elif button == pygame.CONTROLLER_BUTTON_BACK:
+            self.sim.tracker.dropout = not self.sim.tracker.dropout
+
+    def hold_or_resume(self) -> Command:
+        sim = self.sim
+        return Command.RESUME if sim.state is State.HOLD and sim.sm.manual_hold else Command.HOLD
+
+    def send(self, command: Command) -> None:
+        accepted = self.sim.command(command)
+        self.message = "" if accepted else f"отклонено: {self.sim.sm.rejected[-1].reason}"
+
+    def attach_gamepad(self, device_index: int) -> None:
+        if self.gamepad is None and controller.is_controller(device_index):
+            self.gamepad = controller.Controller(device_index)
+            self.message = ""
+
+    def on_gamepad_lost(self) -> None:
+        """Пульт пропал — оператор остался без аварийной кнопки в руке, поэтому в полёте садимся."""
+        self.gamepad = None
+        if self.sim.state in AIRBORNE and self.sim.state is not State.LAND:
+            self.sim.command(Command.LAND)
+            self.message = "геймпад отключился — посадка"
+        else:
+            self.message = "геймпад отключился"
 
     # --- отрисовка ----------------------------------------------------------
 
@@ -196,7 +262,7 @@ class SimApp:
             screen.blit(self.font.render("трекер выключен (T)", True, BAD), (x, y))
         y += 34
 
-        for key, action in HELP:
+        for key, action in HELP_GAMEPAD if self.gamepad is not None else HELP:
             screen.blit(self.font.render(key, True, TEXT), (x, y))
             screen.blit(self.font.render(action, True, MUTED), (x + 140, y))
             y += 22
